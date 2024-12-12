@@ -9,3 +9,13 @@ group_color <-
     "Ctrl" = "#20854EFF",
     "QC" = "#FFDC91FF"
   )
+
+
+colors <- ggsci::pal_npg()(10) 
+scales::show_col(colors)
+print(colors)
+
+
+colors <- ggsci::pal_bmj()(10) 
+scales::show_col(colors)
+print(colors)

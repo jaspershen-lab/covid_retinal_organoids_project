@@ -1,18 +1,18 @@
 library(r4projects)
 setwd(get_project_wd())
 rm(list = ls())
-source('1-code/100-tools.R')
+source('1_code/100-tools.R')
 
 ##read data
-load("3-data_analysis/2-data-cleaning/3-lipidome/lipidome_data.RData")
+load("3_data_analysis/2-data-cleaning/3-lipidome/lipidome_data.RData")
 
 dir.create(
-  "3-data_analysis/4-differential_analysis/3-lipidome",
+  "3_data_analysis/4-differential_analysis/3-lipidome",
   recursive = TRUE,
   showWarnings = FALSE
 )
 
-setwd("3-data_analysis/4-differential_analysis/3-lipidome")
+setwd("3_data_analysis/4-differential_analysis/3-lipidome")
 
 lipidome_data@sample_info
 
