@@ -1,10 +1,6 @@
 library(tidyverse)
 library(ggplot2)
 
-<<<<<<< Updated upstream
-
-
-=======
 group_color <-
   c(
     "BA52" = "#BC3C29FF",
@@ -13,4 +9,4 @@ group_color <-
     "Ctrl" = "#20854EFF",
     "QC" = "#FFDC91FF"
   )
->>>>>>> Stashed changes
+

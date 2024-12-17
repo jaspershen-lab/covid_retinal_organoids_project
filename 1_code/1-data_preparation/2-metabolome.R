@@ -4,7 +4,7 @@ rm(list = ls())
 source('1_code/100-tools.R')
 
 ###read data
-data <- readxl::read_xlsx("2-data/3. Target metabolomics for eye organoids_report_v1.xlsx") %>%
+data <- readxl::read_xlsx("2_data/3. Target metabolomics for eye organoids_report_v1.xlsx") %>%
   as.data.frame()
 
 dir.create("3_data_analysis/1_data_preparation/2-metabolome/",
@@ -66,6 +66,26 @@ expression_data[which(is.na(expression_data), arr.ind = TRUE)] <- 0
 library(massdataset)
 library(tidymass)
 
+variable_info
+
+library(masstools)
+
+variable_info$HMDB <-
+  c("HMDB0000133", "HMDB0000300", "HMDB0001401",
+    "HMDB0000169", "HMDB0000122", "HMDB0000124",
+    "HMDB0000296", "HMDB0000085", "HMDB0000273",
+    "HMDB0000132", "HMDB0006483", "HMDB0000192",
+    "HMDB0011185", "HMDB0000014", "HMDB0000653",
+    "HMDB0001565")
+
+variable_info$KEGG <-
+  c("C00387", "C00106", "C00092",
+    "C00936", "C00221", "C00085",
+    "C00299", "C00330", "C00214",
+    "C00242", "C00402", "C00491",
+    "C12147", "C00881", "C18043",
+    "C00588")
+
 metabolome_data <-
   create_mass_dataset(
     expression_data = expression_data,
@@ -73,19 +93,19 @@ metabolome_data <-
     sample_info = sample_info
   )
 
-variable_info <-
-  extract_variable_info(metabolome_data)
+# variable_info <-
+#   extract_variable_info(metabolome_data)
+# 
+# variable_info$note <-
+#   variable_info$Compound.name %>%
+#   stringr::str_extract("\\[MS2 confirm\\]|w/o MS2")
+# 
+# variable_info$Compound.name <-
+#   variable_info$Compound.name %>%
+#   stringr::str_replace("\\[MS2 confirm\\]|w/o MS2:", "") %>%
+#   stringr::str_trim(side = "both")
+# 
+# metabolome_data@variable_info <-
+#   variable_info
 
-variable_info$note <-
-  variable_info$Compound.name %>%
-  stringr::str_extract("\\[MS2 confirm\\]|w/o MS2")
-
-variable_info$Compound.name <-
-  variable_info$Compound.name %>%
-  stringr::str_replace("\\[MS2 confirm\\]|w/o MS2:", "") %>%
-  stringr::str_trim(side = "both")
-
-metabolome_data@variable_info <-
-  variable_info
-
-save(metabolome_data, file = "metabolome_data.RData")
+save(metabolome_data, file = "metabolome_data.rda")
