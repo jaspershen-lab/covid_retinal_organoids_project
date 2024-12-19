@@ -388,21 +388,13 @@ get_mfuzz_center <- function(data, c, membership_cutoff) {
   for(i in 1:nrow(centers)) {
     # 找出属于该cluster的基因
     cluster_genes <- memb[, i] > membership_cutoff
-    
-    ```
     if(sum(cluster_genes) > 0) {
       # 计算这些基因的平均表达值
       centers[i, ] <- colMeans(exprs(data)[cluster_genes, , drop = FALSE])
     }
-    
-    ```
-    
   }
-  
   # 移除全NA的行
-  
   centers <- centers[rowSums(![is.na](http://is.na/)(centers)) > 0, ]
-  
   return(centers)
 }
 
