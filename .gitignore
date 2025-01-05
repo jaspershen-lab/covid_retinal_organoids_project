@@ -67,3 +67,7 @@ rsconnect/
 echo ".DS_Store" >> ~/.gitignore_global
 echo "._*" >> ~/.gitignore_global
 git config --global core.excludesfile ~/.gitignore_global
+
+.DS_Store
+._*
+

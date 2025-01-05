@@ -10,8 +10,6 @@ library(pheatmap)
 library(RColorBrewer)
 library(matrixStats)
 
-
-
 ##read data
 load("3_data_analysis/2-data_cleaning/1-transcriptome/transcriptome_data.RData")
 load("2_data/pathway_human/pathway_GO.rda")
@@ -34,6 +32,8 @@ all_sample_ids <- colnames(transcriptome_data@expression_data)
 filtered_sample_ids <- all_sample_ids[!grepl("BQ11", all_sample_ids)]  
 desired_order <- c("Ctrl_1", "Ctrl_2", "Ctrl_3", "WT_1", "WT_2", "WT_3", "BA52_1", "BA52_2", "BA52_3")
 filtered_sample_ids <- intersect(desired_order, filtered_sample_ids) 
+
+
 
 # common_genes
 common_genes <- transcriptome_data@expression_data %>%
@@ -148,6 +148,260 @@ plot
 ggsave("heatmap_100.pdf", plot, width = 10, height = 18)
 
 
+#######clustering
+library(Mfuzz)
+
+# Calculate mean expression for each group
+calculate_group_means <- function(expression_data, sample_groups) {
+  # Get sample indices for each group
+  ctrl_idx <- grep("Ctrl", colnames(expression_data))
+  wt_idx <- grep("WT", colnames(expression_data))
+  ba52_idx <- grep("BA52", colnames(expression_data))
+  
+  # Calculate means
+  group_means <- data.frame(
+    "1" = rowMeans(expression_data[, ctrl_idx, drop = FALSE]),
+    "2" = rowMeans(expression_data[, wt_idx, drop = FALSE]),
+    "3" = rowMeans(expression_data[, ba52_idx, drop = FALSE])
+  )
+  
+  return(group_means)
+}
+
+# Use the top genes from previous analysis
+temp_data <- calculate_group_means(heatmap_matrix[top_var_genes, ], filtered_sample_ids)
+expression_data <- temp_data
+
+# Add time points
+time <- colnames(temp_data)
+temp_data <- rbind(time, temp_data)
+row.names(temp_data)[1] <- "time"
+
+# Write to file for Mfuzz input
+write.table(
+  temp_data,
+  file = "temp_data.txt",
+  sep = '\t',
+  quote = FALSE,
+  col.names = NA
+)
+
+# Create expression set and standardize
+data <- table2eset(filename = "temp_data.txt")
+data.s <- data
+m1 <- mestimate(data.s)
+
+# Determine optimal cluster number
+plot <-
+  Dmin(
+    data.s,
+    m = m1,
+    crange = seq(2, 40, 2),
+    repeats = 3,
+    visu = TRUE
+  )
+
+plot <-
+  plot %>%
+  data.frame(distance = plot,
+             k = seq(2, 40, 2)) %>%
+  ggplot(aes(k, distance)) +
+  geom_point(shape = 21, size = 4, fill = "black") +
+  geom_segment(aes(
+    x = k,
+    y = 0,
+    xend = k,
+    yend = distance
+  )) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_text(size = 13),
+    axis.text = element_text(size = 12),
+    panel.background = element_rect(fill = "transparent", color = NA),
+    plot.background = element_rect(fill = "transparent", color = NA),
+    legend.background = element_rect(fill = "transparent", color = NA)
+  ) +
+  labs(x = "Cluster number",
+       y = "Min. centroid distance") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+
+ggsave(plot,
+       filename = "distance_k_number.pdf",
+       width = 7,
+       height = 7)
+
+# Perform clustering
+cluster_number <- 9
+c <- mfuzz(data.s, c = cluster_number, m = m1)
+save(c, file = "c")
+
+# Analyze cluster correlations
+membership_cutoff <- 0.5
+center <- get_mfuzz_center(data = data.s,
+                           c = c,
+                           membership_cutoff = 0.5)
+
+rownames(center) <- paste("Cluster", rownames(center), sep = ' ')
+
+# Plot correlation matrix
+corrplot::corrplot(
+  corr = cor(t(center)),
+  type = "full",
+  diag = TRUE,
+  order = "hclust",
+  hclust.method = "ward.D",
+  col = colorRampPalette(colors = rev(
+    RColorBrewer::brewer.pal(n = 11, name = "Spectral")
+  ))(n = 100),
+  number.cex = .7,
+  addCoef.col = "black"
+)
+
+# Plot clusters
+mfuzz.plot(
+  eset = data.s,
+  min.mem = 0.5,
+  cl = c,
+  mfrow = c(3, 4),
+  time.labels = time,
+  new.window = FALSE
+)
+
+# Generate cluster information
+cluster_info <-
+  data.frame(
+    variable_id = names(c$cluster),
+    c$membership,
+    cluster = c$cluster,
+    stringsAsFactors = FALSE
+  ) %>%
+  arrange(cluster)
+
+# Plot individual clusters
+for (idx in 1:cluster_number) {
+  cat(idx, " ")
+  
+  cluster_data <-
+    cluster_info %>%
+    dplyr::select(1, 1 + idx, cluster)
+  
+  colnames(cluster_data)[2] <- c("membership")
+  
+  cluster_data <-
+    cluster_data %>%
+    dplyr::filter(membership > membership_cutoff)
+  
+  path <- paste("cluster", idx, sep = "_")
+  dir.create(path)
+  
+  openxlsx::write.xlsx(
+    cluster_data,
+    file = file.path(path, paste("cluster", idx, ".xlsx", sep = "")),
+    asTable = TRUE,
+    overwrite = TRUE
+  )
+  
+  temp_center <-
+    center[idx, , drop = TRUE] %>%
+    unlist() %>%
+    data.frame(time = names(.),
+               value = .,
+               stringsAsFactors = FALSE) %>%
+    dplyr::mutate(time = as.numeric(time))
+  
+  temp <-
+    expression_data[cluster_data$variable_id,] %>%
+    data.frame(
+      membership = cluster_data$membership,
+      .,
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    ) %>%
+    tibble::rownames_to_column(var = "variable_id") %>%
+    tidyr::pivot_longer(
+      cols = -c(variable_id, membership),
+      names_to = "time",
+      values_to = "value"
+    ) %>%
+    dplyr::mutate(time = as.numeric(time))
+  
+  if ("class" %in% colnames(variable_info)) {
+    temp <- temp %>%
+      dplyr::left_join(variable_info[, c("variable_id", "class")],
+                       by = "variable_id")
+  }
+  
+  plot <-
+    temp %>%
+    dplyr::arrange(membership, variable_id) %>%
+    {if ("class" %in% colnames(.)) dplyr::arrange(., desc(class)) else .} %>%
+    dplyr::mutate(variable_id = factor(variable_id, levels = unique(variable_id))) %>%
+    ggplot(aes(time, value, group = variable_id)) +
+    {if ("class" %in% colnames(temp)) 
+      geom_line(aes(color = class), alpha = 0.7)
+      else 
+        geom_line(alpha = 0.7)} +
+    theme_bw() +
+    theme(
+      legend.position = "bottom",
+      legend.justification = c(0, 1),
+      panel.grid = element_blank(),
+      axis.title = element_text(size = 13),
+      axis.text = element_text(size = 12),
+      axis.text.x = element_text(size = 12),
+      panel.background = element_rect(fill = "transparent", color = NA),
+      plot.background = element_rect(fill = "transparent", color = NA),
+      legend.background = element_rect(fill = "transparent", color = NA)
+    ) +
+    labs(
+      x = "",
+      y = "Z-score",
+      title = paste("Cluster ",
+                    idx,
+                    " (",
+                    nrow(cluster_data),
+                    " molecules)",
+                    sep = "")
+    ) +
+    geom_line(
+      mapping = aes(time, value, group = 1),
+      data = temp_center,
+      size = 2
+    ) +
+    geom_hline(yintercept = 0) +
+    {if ("class" %in% colnames(temp) && exists("omics_color")) 
+      scale_color_manual(values = omics_color)
+      else 
+        scale_color_viridis_d()}
+  
+  ggsave(
+    plot,
+    filename = file.path(path, paste("cluster", idx, ".pdf", sep = "")),
+    width = 8,
+    height = 7
+  )
+}
+
+# Save final cluster information
+final_cluster_info <-
+  unique(cluster_info$cluster) %>%
+  purrr::map(function(x) {
+    temp <-
+      cluster_info %>%
+      dplyr::select(variable_id, paste0("X", x), cluster)
+    colnames(temp)[2] <- "membership"
+    temp <-
+      temp %>%
+      dplyr::filter(membership >= membership_cutoff) %>%
+      dplyr::mutate(cluster_raw = cluster,
+                    cluster = x)
+    temp
+  }) %>%
+  dplyr::bind_rows() %>%
+  as.data.frame()
+
+save(final_cluster_info, file = "final_cluster_info")
 
 
 #########neuro_related pathways
@@ -238,325 +492,6 @@ plot
 
 ggsave("neuro_heatmap_100.pdf", plot, width = 10, height = 18)
 
-
-######clustering
-library(Mfuzz)
-
-# Calculate mean expression for each group
-
-calculate_group_means <- function(expression_data, sample_groups) {
-  
-  # Get sample indices for each group
-  
-  ctrl_idx <- grep("Ctrl", colnames(expression_data))
-  wt_idx <- grep("WT", colnames(expression_data))
-  ba52_idx <- grep("BA52", colnames(expression_data))
-  
-  # Calculate means
-  
-  group_means <- data.frame(
-    "1" = rowMeans(expression_data[, ctrl_idx, drop = FALSE]),
-    "2" = rowMeans(expression_data[, wt_idx, drop = FALSE]),
-    "3" = rowMeans(expression_data[, ba52_idx, drop = FALSE])
-  )
-  
-  return(group_means)
-}
-
-# previous analysis
-
-temp_data <- calculate_group_means(heatmap_matrix, filtered_sample_ids)
-expression_data <- temp_data
-
-# Add time points
-
-time <- colnames(temp_data)
-temp_data <- rbind(time, temp_data)
-row.names(temp_data)[1] <- "time"
-
-# Write to file for Mfuzz input
-
-write.table(
-  temp_data,
-  file = "temp_data.txt",
-  sep = '\t',
-  quote = FALSE,
-  col.names = NA
-)
-
-# Create expression set and standardize
-
-data <- table2eset(filename = "temp_data.txt")
-data.s <- data
-m1 <- mestimate(data.s)
-
-# First, let's identify rows with all NAs
-
-all_na_rows <- which(apply(exprs(data.s), 1, function(x) all([is.na](http://is.na/)(x))))
-length(all_na_rows)  # See how many rows have all NAs
-
-# Let's also look at the distribution of NAs per row
-
-na_counts <- apply(exprs(data.s), 1, function(x) sum([is.na](http://is.na/)(x)))
-table(na_counts)  # This will show us how many NAs are in each row
-
-# Now let's handle this more carefully:
-
-exprs(data.s) <- t(apply(exprs(data.s), 1, function(x) {
-  if(all([is.na](http://is.na/)(x))) {
-    return(rep(0, length(x)))  # Replace all-NA rows with zeros
-  } else {
-    x[[is.na](http://is.na/)(x)] <- mean(x, na.rm = TRUE)
-    return(x)
-  }
-}))
-
-# Verify NAs are gone
-
-sum([is.na](http://is.na/)(exprs(data.s)))  # Should now return 0
-
-# Determine optimal cluster number
-
-plot <-
-  Dmin(
-    data.s,
-    m = m1,
-    crange = seq(2, 40, 2),
-    repeats = 3,
-    visu = TRUE
-  )
-
-plot <-
-  plot %>%
-  data.frame(distance = plot,
-             k = seq(2, 40, 2)) %>%
-  ggplot(aes(k, distance)) +
-  geom_point(shape = 21, size = 4, fill = "black") +
-  geom_segment(aes(
-    x = k,
-    y = 0,
-    xend = k,
-    yend = distance
-  )) +
-  theme_bw() +
-  theme(
-    panel.grid = element_blank(),
-    axis.title = element_text(size = 13),
-    axis.text = element_text(size = 12),
-    panel.background = element_rect(fill = "transparent", color = NA),
-    plot.background = element_rect(fill = "transparent", color = NA),
-    legend.background = element_rect(fill = "transparent", color = NA)
-  ) +
-  labs(x = "Cluster number",
-       y = "Min. centroid distance") +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
-
-plot
-
-ggsave(plot,
-       filename = "distance_k_number.pdf",
-       width = 7,
-       height = 7)
-
-# Perform clustering
-
-cluster_number <- 6
-c <- mfuzz(data.s, c = cluster_number, m = m1)
-save(c, file = "c")
-
-# Check cluster assignments
-
-table(c$cluster)
-
-# Analyze cluster correlations
-
-membership_cutoff <- 0.5
-
-# Define the get_mfuzz_center function
-
-get_mfuzz_center <- function(data, c, membership_cutoff) {
-  
-  # 获取每个基因的membership值
-  
-  memb <- c$membership
-  
-  # 获取中心点
-  
-  centers <- matrix(NA, nrow = ncol(memb), ncol = ncol(data))  # 初始化为NA而不是0
-  rownames(centers) <- paste("Cluster", 1:ncol(memb), sep = ' ')
-  
-  for(i in 1:nrow(centers)) {
-    # 找出属于该cluster的基因
-    cluster_genes <- memb[, i] > membership_cutoff
-    if(sum(cluster_genes) > 0) {
-      # 计算这些基因的平均表达值
-      centers[i, ] <- colMeans(exprs(data)[cluster_genes, , drop = FALSE])
-    }
-  }
-  # 移除全NA的行
-  centers <- centers[rowSums(![is.na](http://is.na/)(centers)) > 0, ]
-  return(centers)
-}
-
-# Get centers and check dimensions
-
-center <- get_mfuzz_center(data = data.s, c = c, membership_cutoff = 0.5)
-
-dim(center)
-
-rownames(center) <- paste("Cluster", 1:6, sep = ' ')
-
-# Plot correlation matrix
-
-corrplot::corrplot(
-  corr = cor(t(center)),
-  type = "full",
-  diag = TRUE,
-  order = "original",
-  col = rev(RColorBrewer::brewer.pal(n = 11, name = "Spectral")),
-  number.cex = .7,
-  addCoef.col = "black"
-)
-
-# Plot clusters
-
-mfuzz.plot(
-  eset = data.s,
-  min.mem = 0.3,
-  cl = c,
-  mfrow = c(2, 3),
-  time.labels = c("ctrl", "wt", "ba52"),,
-  new.window = FALSE
-)
-
-# Generate cluster information
-
-cluster_info <-
-  data.frame(
-    variable_id = names(c$cluster),
-    c$membership,
-    cluster = c$cluster,
-    stringsAsFactors = FALSE
-  ) %>%
-  arrange(cluster)
-
-# Plot individual clusters
-
-cluster_number <- nrow(center)
-
-for (idx in 1:cluster_number) {
-  cat(idx, " ")
-  
-  cluster_name <- paste("Cluster", idx)
-  
-  cluster_data <-
-    cluster_info %>%
-    dplyr::select(1, 1 + idx, cluster) %>%
-    `colnames<-`(c("variable_id", "membership", "cluster")) %>%
-    dplyr::filter(membership > membership_cutoff)
-  
-  # Skip empty clusters
-  
-  if(nrow(cluster_data) == 0) next
-  if(!cluster_name %in% rownames(center)) next
-  
-  path <- paste("cluster", idx, sep = "_")
-  dir.create(path, showWarnings = FALSE)
-  
-  openxlsx::write.xlsx(
-    cluster_data,
-    file = file.path(path, paste("cluster", idx, ".xlsx", sep = "")),
-    asTable = TRUE,
-    overwrite = TRUE
-  )
-  
-  temp_center <- data.frame(
-    time = 1:3,
-    value = as.numeric(center[cluster_name, ]),
-    stringsAsFactors = FALSE
-  )
-  
-  temp <-
-    expression_data[cluster_data$variable_id,] %>%
-    data.frame(
-      membership = cluster_data$membership,
-      .,
-      stringsAsFactors = FALSE,
-      check.names = FALSE
-    ) %>%
-    tibble::rownames_to_column(var = "variable_id") %>%
-    tidyr::pivot_longer(
-      cols = -c(variable_id, membership),
-      names_to = "time",
-      values_to = "value"
-    ) %>%
-    dplyr::mutate(time = as.numeric(time))
-  
-  plot <-
-    temp %>%
-    dplyr::arrange(membership) %>%  # 按 membership 排序，让高 membership 的线条画在上面
-    dplyr::mutate(variable_id = factor(variable_id, levels = unique(variable_id))) %>%
-    ggplot(aes(time, value, group = variable_id)) +
-    geom_line(aes(alpha = membership, color = membership)) +  # 使用 membership 来控制颜色和透明度
-    scale_color_gradient(low = "lightblue", high = "red") +  # 设置颜色渐变
-    scale_alpha(range = c(0.2, 0.8)) +  # 设置透明度范围
-    theme_bw() +
-    theme(
-      legend.position = "none",
-      panel.grid = element_blank(),
-      axis.title = element_text(size = 13),
-      axis.text = element_text(size = 12),
-      axis.text.x = element_text(size = 12),
-      panel.background = element_rect(fill = "white"),  # 改为白色背景
-      plot.background = element_rect(fill = "white")    # 改为白色背景
-    ) +
-    labs(
-      x = "",
-      y = "Z-score",
-      title = paste("Cluster ",
-                    idx,
-                    " (",
-                    nrow(cluster_data),
-                    " molecules)",
-                    sep = "")
-    ) +
-    geom_line(
-      mapping = aes(time, value, group = 1),
-      data = temp_center,
-      size = 1.5,
-      color = "black"  # 中心线使用黑色
-    ) +
-    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
-    scale_x_continuous(breaks = 1:3, labels = c("ctrl", "wt", "ba52"))
-  
-  ggsave(
-    plot,
-    filename = file.path(path, paste("cluster", idx, ".pdf", sep = "")),
-    width = 8,
-    height = 7
-  )
-}
-
-# Save final cluster information
-
-final_cluster_info <-
-  unique(cluster_info$cluster) %>%
-  purrr::map(function(x) {
-    temp <-
-      cluster_info %>%
-      dplyr::select(variable_id, paste0("X", x), cluster)
-    colnames(temp)[2] <- "membership"
-    temp <-
-      temp %>%
-      dplyr::filter(membership >= membership_cutoff) %>%
-      dplyr::mutate(cluster_raw = cluster,
-                    cluster = x)
-    temp
-  }) %>%
-  dplyr::bind_rows() %>%
-  as.data.frame()
-
-save(final_cluster_info, file = "final_cluster_info")
 
 
 
