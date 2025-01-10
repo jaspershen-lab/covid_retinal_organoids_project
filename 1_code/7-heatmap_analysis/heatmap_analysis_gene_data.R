@@ -176,7 +176,7 @@ calculate_group_means <- function(expression_data, sample_groups) {
   return(group_means)
 }
 
-# Use all metabolites for clustering
+# Use all genes for clustering
 temp_data <- calculate_group_means(heatmap_matrix, filtered_sample_ids)
 expression_data <- temp_data
 
@@ -279,7 +279,7 @@ for (idx in 1:cluster_number) {
     dplyr::filter(membership > membership_cutoff)
   
   # Print cluster information for debugging
-  print(paste("Number of metabolites in cluster", idx, ":", nrow(cluster_data)))
+  print(paste("Number of genes in cluster", idx, ":", nrow(cluster_data)))
   
   path <- paste("cluster", idx, sep = "_")
   dir.create(path, showWarnings = FALSE)
@@ -315,7 +315,7 @@ for (idx in 1:cluster_number) {
     print("Sample of metabolite data:")
     print(head(temp))
     
-    # Create plot with both center line and individual metabolites
+    # Create plot with both center line and individual genes
     plot <- ggplot() +
       # Individual metabolite lines
       geom_line(data = temp,
@@ -343,7 +343,7 @@ for (idx in 1:cluster_number) {
       labs(
         x = "Time point",
         y = "Z-score",
-        title = paste("Cluster", idx, "(", nrow(cluster_data), "metabolites)")
+        title = paste("Cluster", idx, "(", nrow(cluster_data), "genes)")
       ) +
       scale_x_continuous(breaks = 1:3, 
                          labels = c("Ctrl", "WT", "BA52")) +
@@ -360,7 +360,7 @@ for (idx in 1:cluster_number) {
       height = 6
     )
   } else {
-    warning(paste("No metabolites in cluster", idx, "with membership >", membership_cutoff))
+    warning(paste("No genes in cluster", idx, "with membership >", membership_cutoff))
   }
 }
 

@@ -43,6 +43,8 @@ expression_data <- metabolome_data@expression_data[common_metabolites, filtered_
 unique_compounds <- make.unique(common_metabolite_info$Compound.name)
 rownames(expression_data) <- unique_compounds
 
+
+
 # Initial heatmap of all metabolites
 heatmap_matrix <- t(scale(t(expression_data)))  # Scale by row (Z-score)
 
