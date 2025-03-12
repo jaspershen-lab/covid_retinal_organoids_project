@@ -144,7 +144,6 @@ setwd("3_data_analysis/xiaotao/1_qpcr_data")
 # save(gene_data, file = "gene_data.rda")
 load("gene_data.rda")
 
-
 ##map gene to pathways
 mapped_result_gene <-
   pathway@gene_list %>%

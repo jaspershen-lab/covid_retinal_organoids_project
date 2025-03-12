@@ -18,7 +18,7 @@ library(GseaVis)
 
 
 ##read data
-load("3_data_analysis/4-differential_analysis/1-transcriptome/transcriptome_data")
+load("3_data_analysis/4_differential_analysis/1-transcriptome/transcriptome_data")
 
 
 

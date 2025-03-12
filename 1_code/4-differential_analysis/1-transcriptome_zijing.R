@@ -9,12 +9,12 @@ library(tidymass)
 load("3_data_analysis/2-data-cleaning/1-transcriptome/transcriptome_data.RData")
 
 dir.create(
-  "3_data_analysis/4-differential_analysis/1-transcriptome",
+  "3_data_analysis/4_differential_analysis/1-transcriptome",
   recursive = TRUE,
   showWarnings = FALSE
 )
 
-setwd("3_data_analysis/4-differential_analysis/1-transcriptome")
+setwd("3_data_analysis/4_differential_analysis/1-transcriptome")
 
 transcriptome_data@sample_info
 

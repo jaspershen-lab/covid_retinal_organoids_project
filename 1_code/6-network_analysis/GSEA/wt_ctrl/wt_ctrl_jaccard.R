@@ -11,7 +11,7 @@ library(clusterProfiler)
 library(ggnewscale)
 
 # Load data
-load("3_data_analysis/4-differential_analysis/1-transcriptome/transcriptome_data")
+load("3_data_analysis/4_differential_analysis/1-transcriptome/transcriptome_data")
 data <- transcriptome_data@variable_info[, c("SYMBOL", "fc_wt_ctrl", "p_value_adjust_wt_ctrl")]
 go_results <- read_csv("3_data_analysis/5-pathway_analysis/GSEA/wt_ctrl/GO/GSEA_go_wt_ctrl.csv")
 kegg_results <- read_csv("3_data_analysis/5-pathway_analysis/GSEA/wt_ctrl/KEGG/GSEA_KEGG_wt_ctrl.csv")

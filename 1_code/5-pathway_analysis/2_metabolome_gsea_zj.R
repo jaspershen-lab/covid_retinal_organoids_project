@@ -9,12 +9,12 @@ library(tidymass)
 load("3_data_analysis/2-data_cleaning/2-metabolome/metabolome_data.RData")
 
 dir.create(
-  "3_data_analysis/4-differential_analysis/2-metabolome_zj",
+  "3_data_analysis/4_differential_analysis/2-metabolome_zj",
   recursive = TRUE,
   showWarnings = FALSE
 )
 
-setwd("3_data_analysis/4-differential_analysis/2-metabolome_zj")
+setwd("3_data_analysis/4_differential_analysis/2-metabolome_zj")
 
 metabolome_data@sample_info
 metabolome_data@variable_info

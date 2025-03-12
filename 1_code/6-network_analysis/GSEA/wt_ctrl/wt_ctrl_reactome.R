@@ -14,7 +14,7 @@ library(enrichplot)
 library(ggridges)
 
 ##read data wt_ctrl
-load("3_data_analysis/4-differential_analysis/1-transcriptome/transcriptome_data")
+load("3_data_analysis/4_differential_analysis/1-transcriptome/transcriptome_data")
 data <- transcriptome_data@variable_info[, c("SYMBOL", "fc_wt_ctrl")]
 reactome_results<- read_csv("3_data_analysis/5-pathway_analysis/GSEA/wt_ctrl/REACTOME/GSEA_reactome_wt_ctrl.csv")
 

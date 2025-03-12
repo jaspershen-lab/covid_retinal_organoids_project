@@ -10,7 +10,7 @@ library(org.Hs.eg.db)
 library(clusterProfiler)
 
 # Load data
-load("3_data_analysis/4-differential_analysis/1-transcriptome/transcriptome_data")
+load("3_data_analysis/4_differential_analysis/1-transcriptome/transcriptome_data")
 data <- transcriptome_data@variable_info[, c("SYMBOL", "fc_ba52_ctrl", "p_value_adjust_ba52_ctrl")]
 go_results <- read_csv("3_data_analysis/5-pathway_analysis/GSEA/ba52_ctrl/GO/GSEA_go_ba52_ctrl.csv")
 kegg_results <- read_csv("3_data_analysis/5-pathway_analysis/GSEA/ba52_ctrl/KEGG/GSEA_KEGG_ba52_ctrl.csv")
