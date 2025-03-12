@@ -157,229 +157,278 @@ dev.off()
 
 
 
+
+
+library(tidymass)
+library(dplyr)
 library(Mfuzz)
+library(tidyr)
+library(ggplot2)
+library(RColorBrewer)
+library(corrplot)
+library(pheatmap)
 
-# Calculate mean expression for each group
-calculate_group_means <- function(expression_data, sample_groups) {
-  # Get sample indices for each group
-  ctrl_idx <- grep("Mock", colnames(expression_data))
-  wt_idx <- grep("WT", colnames(expression_data))
-  ba52_idx <- grep("BA52", colnames(expression_data))
-  
-  # Calculate means
-  group_means <- data.frame(
-    "1" = rowMeans(expression_data[, ctrl_idx, drop = FALSE]),
-    "2" = rowMeans(expression_data[, wt_idx, drop = FALSE]),
-    "3" = rowMeans(expression_data[, ba52_idx, drop = FALSE])
-  )
-  
-  return(group_means)
-}
 
-# Use all genes for clustering
-temp_data <- calculate_group_means(heatmap_matrix, filtered_sample_ids)
-expression_data <- temp_data
+# Store original data in a different name to avoid conflicts
+original_gene_data <- gene_data
 
-# Add time points
-time <- colnames(temp_data)
-temp_data <- rbind(time, temp_data)
-row.names(temp_data)[1] <- "time"
+# Create output directory
+dir.create("clustering_results", recursive = TRUE, showWarnings = FALSE)
 
-# Write to file for Mfuzz input
+######################## 1. Data Preprocessing ########################
+# Define sample IDs in desired order
+desired_order <- c("Mock-A", "Mock-B", "Mock-C", 
+                   "WT-A", "WT-B", "WT-C", 
+                   "BA52-A", "BA52-B", "BA52-C")
+
+# Extract expression matrix
+expression_matrix <- gene_data@expression_data[, desired_order]
+
+# Get complete genes
+complete_genes <- rownames(expression_matrix)[complete.cases(expression_matrix)]
+expression_matrix <- expression_matrix[complete_genes, ]
+
+# Remove rows with very low variance
+row_vars <- apply(expression_matrix, 1, var)
+expression_matrix <- expression_matrix[row_vars > 1e-10, ]
+
+# Calculate group means
+grouped_matrix <- matrix(0, nrow = nrow(expression_matrix), ncol = 3)
+colnames(grouped_matrix) <- c("Mock", "WT", "BA52")
+rownames(grouped_matrix) <- rownames(expression_matrix)
+
+# Calculate means for each group
+grouped_matrix[, "Mock"] <- rowMeans(expression_matrix[, grep("Mock", colnames(expression_matrix))])
+grouped_matrix[, "WT"] <- rowMeans(expression_matrix[, grep("WT", colnames(expression_matrix))])
+grouped_matrix[, "BA52"] <- rowMeans(expression_matrix[, grep("BA52", colnames(expression_matrix))])
+
+# Scale the grouped data
+grouped_matrix_scaled <- t(scale(t(grouped_matrix)))
+
+######################## 2. Prepare Mfuzz Input ########################
+# Create time points
+temp_data <- rbind(
+  time = 1:3,
+  grouped_matrix_scaled
+)
+
+# Save temporary data
 write.table(
   temp_data,
-  file = "temp_data.txt",
+  file = "clustering_results/temp_data.txt",
   sep = '\t',
   quote = FALSE,
   col.names = NA
 )
 
-# Create expression set and standardize
-data <- table2eset(filename = "temp_data.txt")
-data.s <- standardise(data)
-m1 <- mestimate(data.s)
+# Create ExpressionSet
+data <- table2eset(filename = "clustering_results/temp_data.txt")
 
-# Get mfuzz center function
-get_mfuzz_center <- function(data, c, membership_cutoff) {
-  centers <- c$centers
-  membership <- c$membership
-  
-  for (i in 1:nrow(centers)) {
-    cluster_members <- which(c$cluster == i & 
-                               apply(membership, 1, max) >= membership_cutoff)
-    
-    if (length(cluster_members) > 0) {
-      centers[i, ] <- colMeans(exprs(data)[cluster_members, , drop = FALSE])
-    }
+######################## 3. Clustering Analysis ########################
+# Estimate best m parameter
+m1 <- mestimate(data)
+print(paste("Estimated m parameter:", m1))
+
+# Optimize cluster number
+dmin_results <- Dmin(data, m = m1, crange = seq(2, 20, 2), repeats = 5, visu = TRUE)
+ggsave("clustering_results/cluster_number_optimization.pdf", width = 8, height = 6)
+
+# Perform clustering
+cluster_number <- 3
+set.seed(123)
+c <- mfuzz(data, c = cluster_number, m = m1)
+
+######################## 4. Create Visualizations ########################
+# 4.1 Correlation Heatmap
+n_clusters <- ncol(c$membership)
+n_timepoints <- ncol(exprs(data))
+centers <- matrix(0, nrow = n_clusters, ncol = n_timepoints)
+
+for(i in 1:n_clusters) {
+  memb <- c$membership[, i]
+  valid_idx <- memb >= 0.5
+  if(sum(valid_idx) > 0) {
+    weights <- memb[valid_idx]
+    expr_data <- exprs(data)[valid_idx, , drop = FALSE]  # 添加 drop = FALSE
+    centers[i,] <- colSums(weights * expr_data) / sum(weights)
   }
-  
-  return(centers)
 }
 
-# Perform clustering with fixed number
-cluster_number <- 3
-c <- mfuzz(data.s, c = cluster_number, m = m1)
-save(c, file = "c")
+rownames(centers) <- paste0("Cluster", 1:n_clusters)
+colnames(centers) <- colnames(exprs(data))
 
-# Analyze cluster correlations
-membership_cutoff <- 0.5
-center <- get_mfuzz_center(data = data.s,
-                           c = c,
-                           membership_cutoff = 0.5)
 
-rownames(center) <- paste("Cluster", rownames(center), sep = ' ')
-
-# Plot correlation matrix
-corrplot::corrplot(
-  corr = cor(t(center)),
+# Plot correlation heatmap
+# Show and save correlation plot
+plot <- corrplot(
+  cor(t(centers)),
   type = "full",
   diag = TRUE,
   order = "hclust",
   hclust.method = "ward.D",
-  col = colorRampPalette(colors = rev(
-    RColorBrewer::brewer.pal(n = 11, name = "Spectral")
-  ))(n = 100),
-  number.cex = .7,
+  col = colorRampPalette(colors = rev(brewer.pal(n = 11, name = "Spectral")))(100),
+  number.cex = 0.7,
   addCoef.col = "black"
 )
 
-# Plot clusters
+# Save plot
+pdf("clustering_results/cluster_correlations.pdf", width = 10, height = 10)
+corrplot(
+  cor(t(centers)),
+  type = "full",
+  diag = TRUE,
+  order = "hclust",
+  hclust.method = "ward.D",
+  col = colorRampPalette(colors = rev(brewer.pal(n = 11, name = "Spectral")))(100),
+  number.cex = 0.7,
+  addCoef.col = "black"
+)
+dev.off()
+
+# 4.2 Cluster Profiles
+membership_cutoff <- 0.6
+
 mfuzz.plot(
-  eset = data.s,
-  min.mem = 0.5,
+  eset = data,
+  min.mem = membership_cutoff,
   cl = c,
-  mfrow = c(2, 3),
-  time.labels = time,
+  mfrow = c(2, 2),
+  time.labels = 1:3,
   new.window = FALSE
 )
 
-# Generate cluster information
-cluster_info <-
-  data.frame(
-    variable_id = names(c$cluster),
-    c$membership,
-    cluster = c$cluster,
-    stringsAsFactors = FALSE
-  ) %>%
-  arrange(cluster)
-
-
-# Plot individual clusters
-for (idx in 1:cluster_number) {
-  cat("Processing cluster", idx, "\n")
+# 4.2 Cluster Profiles
+for(cluster_id in 1:cluster_number) {
+  cluster_members <- which(c$cluster == cluster_id)
+  cluster_data <- grouped_matrix_scaled[cluster_members, ]
   
-  cluster_data <-
-    cluster_info %>%
-    dplyr::select(1, 1 + idx, cluster)
-  
-  colnames(cluster_data)[2] <- c("membership")
-  
-  cluster_data <-
-    cluster_data %>%
-    dplyr::filter(membership > membership_cutoff)
-  
-  # Print cluster information for debugging
-  print(paste("Number of genes in cluster", idx, ":", nrow(cluster_data)))
-  
-  path <- paste("cluster", idx, sep = "_")
-  dir.create(path, showWarnings = FALSE)
-  
-  # Save cluster members
-  openxlsx::write.xlsx(
-    cluster_data,
-    file = file.path(path, paste("cluster", idx, ".xlsx", sep = "")),
-    asTable = TRUE,
-    overwrite = TRUE
-  )
-  
-  # Get center data
-  temp_center <- data.frame(
-    time = 1:3,  # explicitly set time points
-    value = as.numeric(center[idx, ])
-  )
-  
-  # Print center data for debugging
-  print("Center values:")
-  print(temp_center)
-  
-  # Get individual metabolite data
-  if(nrow(cluster_data) > 0) {
-    temp <- data.frame(
-      time = rep(1:3, each = nrow(cluster_data)),
-      value = as.vector(t(expression_data[cluster_data$variable_id, ])),
-      metabolite = rep(cluster_data$variable_id, times = 3),
-      membership = rep(cluster_data$membership, times = 3)
+  plot_data <- data.frame()
+  for(i in 1:nrow(cluster_data)) {
+    gene_data <- data.frame(
+      Gene = paste0("Gene", i),
+      Time = colnames(cluster_data),
+      Value = as.numeric(cluster_data[i, ]),
+      Membership = c$membership[cluster_members[i], cluster_id]
     )
-    
-    # Print first few rows of temp for debugging
-    print("Sample of metabolite data:")
-    print(head(temp))
-    
-    # Create plot with both center line and individual genes
-    plot <- ggplot() +
-      # Individual metabolite lines
-      geom_line(data = temp,
-                aes(x = time, y = value, group = metabolite),
-                alpha = 0.7,
-                color = "grey60") +
-      # Center line
-      geom_line(data = temp_center,
-                aes(x = time, y = value),
-                size = 1.5,
-                color = "red") +
-      # Add points to make the values more visible
-      geom_point(data = temp,
-                 aes(x = time, y = value),
-                 alpha = 0.5,
-                 size = 2) +
-      # Customize the plot
-      theme_bw() +
-      theme(
-        legend.position = "none",
-        panel.grid.minor = element_blank(),
-        axis.title = element_text(size = 13),
-        axis.text = element_text(size = 12)
-      ) +
-      labs(
-        x = "Time point",
-        y = "Z-score",
-        title = paste("Cluster", idx, "(", nrow(cluster_data), "genes)")
-      ) +
-      scale_x_continuous(breaks = 1:3, 
-                         labels = c("Ctrl", "WT", "BA52")) +
-      geom_hline(yintercept = 0, linetype = "dashed", color = "grey50")
-    
-    # Display plot
-    print(plot)
-    
-    # Save plot
-    ggsave(
-      plot,
-      filename = file.path(path, paste("cluster", idx, ".pdf", sep = "")),
-      width = 8,
-      height = 6
-    )
-  } else {
-    warning(paste("No genes in cluster", idx, "with membership >", membership_cutoff))
+    plot_data <- rbind(plot_data, gene_data)
   }
+  
+  plot_data$Time <- factor(plot_data$Time, levels = c("Mock", "WT", "BA52"))
+  mean_profile <- aggregate(Value ~ Time, data = plot_data, FUN = mean)
+  mean_profile$Time <- factor(mean_profile$Time, levels = c("Mock", "WT", "BA52"))
+  
+  p <- ggplot() +
+    geom_line(data = plot_data, 
+              aes(x = Time, y = Value, group = Gene,  
+                  color = Membership),
+              size = 0.8) +
+    geom_line(data = mean_profile,
+              aes(x = Time, y = Value, group = 1),
+              color = "black",  
+              size = 1.2) +
+    scale_color_gradientn(
+      colors = c("#4575B4", "#74ADD1", "#ABD9E9", "#E0F3F8", 
+                 "#FFFFBF", "#FEE090", "#FDAE61", "#F46D43", "#D73027"),   
+      limits = c(0.2, 0.7),
+      oob = scales::squish,    
+      breaks = seq(0.2, 0.7, by = 0.1),
+      name = "Membership"
+    ) +
+    theme_bw() +         
+    labs(title = paste("Cluster", cluster_id, 
+                       "(n=", length(cluster_members), ")"),
+         x = "Group",
+         y = "Expression") +
+    theme(
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = "grey95"),
+      legend.position = "top",
+      legend.key.width = unit(3, "cm")
+    )
+  
+  ggsave(paste0("clustering_results/cluster_", cluster_id, "_profile.pdf"),
+         p, width = 10, height = 7)
+  
+  
+  # Save cluster gene information using S4 object
+  gene_info <- data.frame(
+    gene_id = rownames(grouped_matrix_scaled)[cluster_members],
+    membership = c$membership[cluster_members, cluster_id],
+    SYMBOL = original_gene_data@variable_info$SYMBOL[match(
+      rownames(grouped_matrix_scaled)[cluster_members], 
+      original_gene_data@variable_info$variable_id
+    )],
+    ENTREZID = original_gene_data@variable_info$ENTREZID[match(
+      rownames(grouped_matrix_scaled)[cluster_members], 
+      original_gene_data@variable_info$variable_id
+    )],
+    stringsAsFactors = FALSE
+  )
+  
+  write.csv(
+    gene_info,
+    file = paste0("clustering_results/cluster_", cluster_id, "_genes.csv"),
+    row.names = FALSE
+  )
 }
 
-# Save final cluster information
-final_cluster_info <-
-  unique(cluster_info$cluster) %>%
-  purrr::map(function(x) {
-    temp <-
-      cluster_info %>%
-      dplyr::select(variable_id, paste0("X", x), cluster)
-    colnames(temp)[2] <- "membership"
-    temp <-
-      temp %>%
-      dplyr::filter(membership >= membership_cutoff) %>%
-      dplyr::mutate(cluster_raw = cluster,
-                    cluster = x)
-    temp
-  }) %>%
-  dplyr::bind_rows() %>%
-  as.data.frame()
+# Create final cluster information
+cluster_info <- data.frame(
+  gene_id = rownames(grouped_matrix_scaled),
+  cluster = c$cluster,
+  stringsAsFactors = FALSE
+)
 
-save(final_cluster_info, file = "final_cluster_info")
+cluster_info <- cbind(
+  cluster_info,
+  as.data.frame(c$membership, 
+                stringsAsFactors = FALSE)
+)
+colnames(cluster_info)[3:ncol(cluster_info)] <- paste0("membership_cluster", 1:cluster_number)
+
+cluster_info$max_membership <- apply(c$membership, 1, max)
+
+# Add gene annotations using S4 object
+cluster_info$SYMBOL <- original_gene_data@variable_info$SYMBOL[match(
+  cluster_info$gene_id, 
+  original_gene_data@variable_info$variable_id
+)]
+cluster_info$ENTREZID <- original_gene_data@variable_info$ENTREZID[match(
+  cluster_info$gene_id, 
+  original_gene_data@variable_info$variable_id
+)]
+
+# Calculate group means
+mean_data <- data.frame(
+  gene_id = rownames(expression_matrix),
+  Mock_mean = rowMeans(expression_matrix[, grep("Mock", colnames(expression_matrix))]),
+  WT_mean = rowMeans(expression_matrix[, grep("WT", colnames(expression_matrix))]),
+  BA52_mean = rowMeans(expression_matrix[, grep("BA52", colnames(expression_matrix))])
+)
+
+# Combine all information
+final_cluster_info <- cluster_info %>%
+  left_join(mean_data, by = "gene_id")
+
+# Save results
+write.csv(
+  final_cluster_info,
+  file = "clustering_results/all_clusters_information.csv",
+  row.names = FALSE
+)
+
+# Generate cluster summary
+cluster_summary <- final_cluster_info %>%
+  group_by(cluster) %>%
+  summarise(
+    n_genes = n(),
+    mean_membership = mean(max_membership),
+    sd_membership = sd(max_membership),
+    high_confidence_genes = sum(max_membership > 0.7)
+  )
+
+write.csv(
+  cluster_summary,
+  file = "clustering_results/cluster_summary_statistics.csv",
+  row.names = FALSE
+)

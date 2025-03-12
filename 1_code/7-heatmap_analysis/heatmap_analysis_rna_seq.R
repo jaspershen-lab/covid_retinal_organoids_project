@@ -6,12 +6,14 @@ source('1_code/100-tools.R')
 
 library(tidymass)
 library(dplyr)
+library(Mfuzz)
+library(ComplexHeatmap)
+library(ggplot2)
+library(tidyr)
 library(pheatmap)
 library(RColorBrewer)
-library(matrixStats)
-library(Mfuzz)
-library(tidyr)
-library(ggplot2)
+library(corrplot)
+
 
 
 load("3_data_analysis/2-data_cleaning/1-transcriptome/transcriptome_data.RData")
@@ -160,152 +162,294 @@ plot
 
 ggsave("heatmap_100.pdf", plot, width = 10, height = 18)
 
+# Set heat map colors
+color_scheme <- colorRampPalette(c("navy", "white", "firebrick3"))(100)
+
+# Add annotation
+annotation_col <- data.frame(
+  Group = transcriptome_data@sample_info$group[match(filtered_sample_ids, transcriptome_data@sample_info$sample_id)],
+  stringsAsFactors = FALSE
+)
+rownames(annotation_col) <- filtered_sample_ids
+
+# Plot horizontal heatmap
+plot <- pheatmap(
+  t(heatmap_matrix[top_var_genes, ]), # 转置矩阵
+  color = color_scheme,
+  cluster_rows = FALSE,    
+  cluster_cols = TRUE,     
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+  annotation_row = annotation_col,  
+  main = "Heatmap of All Top Variable Genes",
+  fontsize_row = 10,     
+  fontsize_col = 6,      
+  cellwidth = 8,          
+  cellheight = 20,       
+  border_color = NA
+)
 
 
-# 准备聚类数据
-expression_matrix <- heatmap_matrix[top_var_genes, ]
+ggsave("heatmap_100_horizontal.pdf", plot, width = 18, height = 10) 
 
-# 创建时间点数据框
-create_time_data <- function(sample_names) {
-  data.frame(
-    sample = sample_names,
-    time = case_when(
-      grepl("Ctrl", sample_names) ~ 1,
-      grepl("WT", sample_names) ~ 2,
-      grepl("BA52", sample_names) ~ 3
-    )
-  )
+
+#################### RNA-seq Clustering Analysis ####################
+library(tidymass)
+library(dplyr)
+library(Mfuzz)
+library(tidyr)
+library(ggplot2)
+library(RColorBrewer)
+library(corrplot)
+library(pheatmap)
+
+# Create output directory
+dir.create("clustering_results", recursive = TRUE, showWarnings = FALSE)
+
+######################## 1. Data Preprocessing ########################
+# Screen sample IDs
+# Screen sample IDs
+all_sample_ids <- colnames(transcriptome_data@expression_data)
+filtered_sample_ids <- all_sample_ids[!grepl("BQ11", all_sample_ids)]
+desired_order <- c("Ctrl_1", "Ctrl_2", "Ctrl_3", 
+                   "WT_1", "WT_2", "WT_3", 
+                   "BA52_1", "BA52_2", "BA52_3")
+filtered_sample_ids <- intersect(desired_order, filtered_sample_ids)
+
+# Extract expression matrix
+expression_matrix <- transcriptome_data@expression_data[, filtered_sample_ids]
+
+# Remove rows with very low variance
+row_vars <- apply(expression_matrix, 1, var)
+expression_matrix <- expression_matrix[row_vars > 1e-10, ]
+
+# Calculate group means
+grouped_matrix <- matrix(0, nrow = nrow(expression_matrix), ncol = 3)
+colnames(grouped_matrix) <- c("Ctrl", "WT", "BA52")
+rownames(grouped_matrix) <- rownames(expression_matrix)
+
+# Calculate means for each group
+grouped_matrix[, "Ctrl"] <- rowMeans(expression_matrix[, grep("Ctrl", colnames(expression_matrix))])
+grouped_matrix[, "WT"] <- rowMeans(expression_matrix[, grep("WT", colnames(expression_matrix))])
+grouped_matrix[, "BA52"] <- rowMeans(expression_matrix[, grep("BA52", colnames(expression_matrix))])
+
+# Scale the grouped data
+grouped_matrix_scaled <- t(scale(t(grouped_matrix)))
+
+# ######################## 2. Prepare Mfuzz Input ########################
+# Create time points
+temp_data <- rbind(
+  time = 1:3,
+  grouped_matrix_scaled
+)
+
+# Save temporary data
+write.table(
+  temp_data,
+  file = "clustering_results/temp_data.txt",
+  sep = '\t',
+  quote = FALSE,
+  col.names = NA
+)
+
+# Create ExpressionSet
+data <- table2eset(filename = "clustering_results/temp_data.txt")
+
+######################## 3. Clustering Analysis ########################
+# Estimate best m parameter
+m1 <- mestimate(data)
+print(paste("Estimated m parameter:", m1))
+
+# Optimize cluster number
+dmin_results <- Dmin(data, m = m1, crange = seq(2, 20, 2), repeats = 5, visu = TRUE)
+ggsave("clustering_results/cluster_number_optimization.pdf", width = 8, height = 6)
+
+# Perform clustering
+cluster_number <- 4  # Based on previous analysis
+# 设置随机种子以确保结果可重复
+set.seed(123)
+c <- mfuzz(data, c = cluster_number, m = m1)
+
+######################## 4. Create Visualizations ########################
+# 4.1 Correlation Heatmap
+# Calculate cluster centers
+n_clusters <- ncol(c$membership)
+n_timepoints <- ncol(exprs(data))
+centers <- matrix(0, nrow = n_clusters, ncol = n_timepoints)
+
+for(i in 1:n_clusters) {
+  memb <- c$membership[, i]
+  valid_idx <- memb >= 0.5
+  if(sum(valid_idx) > 0) {
+    weights <- memb[valid_idx]
+    expr_data <- exprs(data)[valid_idx, ]
+    centers[i,] <- colSums(weights * expr_data) / sum(weights)
+  }
 }
 
-time_data <- create_time_data(colnames(expression_matrix))
+rownames(centers) <- paste0("Cluster", 1:n_clusters)
+colnames(centers) <- colnames(exprs(data))
 
-# 将数据转换为Mfuzz所需的格式
-expression_set <- ExpressionSet(assayData = as.matrix(expression_matrix))
-data.s <- standardise(expression_set)
+# Show and save correlation plot
+plot <- corrplot(
+  cor(t(centers)),
+  type = "full",
+  diag = TRUE,
+  order = "hclust",
+  hclust.method = "ward.D",
+  col = colorRampPalette(colors = rev(brewer.pal(n = 11, name = "Spectral")))(100),
+  number.cex = 0.7,
+  addCoef.col = "black"
+)
 
-# 估计最佳的m参数
-m1 <- mestimate(data.s)
+# Save plot
+pdf("clustering_results/cluster_correlations.pdf", width = 10, height = 10)
+corrplot(
+  cor(t(centers)),
+  type = "full",
+  diag = TRUE,
+  order = "hclust",
+  hclust.method = "ward.D",
+  col = colorRampPalette(colors = rev(brewer.pal(n = 11, name = "Spectral")))(100),
+  number.cex = 0.7,
+  addCoef.col = "black"
+)
+dev.off()
+# 4.2 Cluster Profiles
+membership_cutoff <- 0.7
 
-# 确定最佳聚类数
-Dmin(data.s, m = m1, crange = seq(2, 20, 2), repeats = 5, visu = TRUE)
-ggsave("cluster_number_optimization.pdf", width = 8, height = 6)
+mfuzz.plot(
+  eset = data,
+  min.mem = membership_cutoff,
+  cl = c,
+  mfrow = c(2, 2),
+  time.labels = 1:3,
+  new.window = FALSE
+)
 
-# 执行聚类
-cluster_number <- 6  # 可以根据上面的分析结果调整
-c <- mfuzz(data.s, c = cluster_number, m = m1)
-
-# 设置membership阈值
-membership_cutoff <- 0.5
-
-# 可视化每个cluster
-for (idx in 1:cluster_number) {
-  # 获取当前cluster的基因
-  cluster_data <- data.frame(
-    gene_id = names(c$cluster),
-    membership = c$membership[,idx],
-    cluster = c$cluster
-  ) %>%
-    dplyr::filter(cluster == idx, membership > membership_cutoff)
+# Plot cluster profiles
+for(cluster_id in 1:cluster_number) {
+  cluster_members <- which(c$cluster == cluster_id)
+  cluster_data <- grouped_matrix_scaled[cluster_members, ]
   
-  # 提取基因表达数据
-  gene_expr <- expression_matrix[cluster_data$gene_id,] %>%
-    as.data.frame() %>%
-    rownames_to_column("gene_id")
+  plot_data <- data.frame()
+  for(i in 1:nrow(cluster_data)) {
+    gene_data <- data.frame(
+      Gene = paste0("Gene", i),
+      Time = colnames(cluster_data),
+      Value = as.numeric(cluster_data[i, ]),
+      Membership = c$membership[cluster_members[i], cluster_id]
+    )
+    plot_data <- rbind(plot_data, gene_data)
+  }
   
-  # 转换为长格式
-  gene_expr_long <- gene_expr %>%
-    pivot_longer(-gene_id, 
-                 names_to = "sample",
-                 values_to = "expression") %>%
-    left_join(time_data, by = "sample") %>%
-    left_join(cluster_data, by = "gene_id")
+  plot_data$Time <- factor(plot_data$Time, levels = c("Ctrl", "WT", "BA52"))
+  mean_profile <- aggregate(Value ~ Time, data = plot_data, FUN = mean)
+  mean_profile$Time <- factor(mean_profile$Time, levels = c("Ctrl", "WT", "BA52"))
   
-  # 计算均值线数据
-  mean_expr <- gene_expr_long %>%
-    group_by(time) %>%
-    summarize(mean_expression = mean(expression, na.rm = TRUE))
-  
-  # 创建cluster可视化
-  plot <- ggplot() +
-    # 显示个别基因表达曲线
-    geom_line(data = gene_expr_long, 
-              aes(x = time, y = expression, group = gene_id, alpha = membership),
-              color = "grey50") +
-    # 显示均值线
-    geom_line(data = mean_expr,
-              aes(x = time, y = mean_expression),
-              color = "red", size = 1.5) +
-    # 添加点以显示实际数据点
-    geom_point(data = mean_expr,
-               aes(x = time, y = mean_expression),
-               color = "red", size = 3) +
-    # 设置主题和标签
-    theme_bw() +
-    labs(title = paste("Cluster", idx, "(", nrow(cluster_data), " genes)"),
-         x = "Time",
+  p <- ggplot() +
+    geom_line(data = plot_data, 
+              aes(x = Time, y = Value, group = Gene,  
+                  color = Membership),
+              size = 0.8) +
+    geom_line(data = mean_profile,
+              aes(x = Time, y = Value, group = 1),
+              color = "black",  
+              size = 1.2) +
+    scale_color_gradientn(
+      colors = c("#4575B4", "#74ADD1", "#ABD9E9", "#E0F3F8", 
+                 "#FFFFBF", "#FEE090", "#FDAE61", "#F46D43", "#D73027"),   
+      limits = c(0.2, 0.7),    # Adjusted from 0.9 to 0.7 since 3rd Qu. is 0.6336
+      oob = scales::squish,    
+      breaks = seq(0.2, 0.7, by = 0.1),  # Adjusted breaks
+      name = "Membership"
+    ) +
+    theme_bw() +         
+    labs(title = paste("Cluster", cluster_id, 
+                       "(n=", length(cluster_members), ")"),
+         x = "Group",
          y = "Expression") +
     theme(
       panel.grid.minor = element_blank(),
-      legend.position = "none",
-      plot.title = element_text(size = 14, face = "bold"),
-      axis.text = element_text(size = 12),
-      axis.title = element_text(size = 12)
-    ) +
-    scale_x_continuous(breaks = 1:3, labels = c("Ctrl", "WT", "BA52"))
+      panel.grid.major = element_line(color = "grey95"),
+      legend.position = "top",
+      legend.key.width = unit(3, "cm")
+    )
   
-  # 保存图片
-  ggsave(
-    file.path(paste0("cluster_", idx, "_improved.pdf")),
-    plot,
-    width = 8,
-    height = 6
-  )
+  ggsave(paste0("clustering_results/cluster_", cluster_id, "_profile.pdf"),
+         p, width = 10, height = 7)
   
-  ggsave(
-    file.path(paste0("cluster_", idx, "_improved.png")),
-    plot,
-    width = 8,
-    height = 6
-  )
   
-  # 保存cluster基因信息
+  # Save cluster gene information with symbols
+  gene_info <- data.frame(
+    gene_id = names(cluster_members),
+    membership = c$membership[cluster_members, cluster_id],
+    stringsAsFactors = FALSE
+  ) %>%
+    left_join(transcriptome_data@variable_info, by = c("gene_id" = "variable_id"))
+  
   write.csv(
-    cluster_data %>% 
-      left_join(common_gene_info, by = c("gene_id" = "ENSEMBL")),
-    file = paste0("cluster_", idx, "_genes.csv"),
+    gene_info,
+    file = paste0("clustering_results/cluster_", cluster_id, "_genes.csv"),
     row.names = FALSE
   )
 }
 
-# 保存聚类结果
-save(c, file = "clustering_results.RData")
+# Print final summary
+print("Clustering Analysis Complete!")
+print("Number of genes in each cluster:")
+print(table(c$cluster))
+print("\nMembership summary:")
+print(summary(apply(c$membership, 1, max)))
 
-# 分析cluster相关性
-cluster_correlations <- cor(t(c$centers))
-pdf("cluster_correlations.pdf", width = 8, height = 8)
-corrplot::corrplot(
-  cluster_correlations,
-  method = "color",
-  type = "upper",
-  order = "hclust",
-  addCoef.col = "black",
-  tl.col = "black",
-  tl.srt = 45,
-  diag = FALSE
+
+
+
+# Create cluster info dataframe
+cluster_info <- data.frame(
+  gene_id = rownames(grouped_matrix_scaled),
+  cluster = c$cluster
 )
-dev.off()
 
-# 保存最终的cluster信息
-final_cluster_info <- data.frame(
-  gene_id = names(c$cluster),
-  cluster = c$cluster,
-  max_membership = apply(c$membership, 1, max)
-) %>%
-  filter(max_membership >= membership_cutoff)
+# Add membership info
+cluster_info <- cbind(
+  cluster_info,
+  as.data.frame(c$membership, 
+                stringsAsFactors = FALSE)
+)
+colnames(cluster_info)[3:ncol(cluster_info)] <- paste0("membership_cluster", 1:cluster_number)
 
+cluster_info$max_membership <- apply(c$membership, 1, max)
+
+# Now print distribution
+print(table(cluster_info$cluster))
+
+
+# Process clusters with membership cutoff
+membership_cutoff <- 0.5
+cluster_summary <- unique(cluster_info$cluster) %>%
+  purrr::map(function(x) {
+    cluster_info %>%
+      dplyr::select(gene_id, paste0("membership_cluster", x), cluster) %>%
+      dplyr::rename(membership = paste0("membership_cluster", x)) %>%
+      dplyr::filter(membership >= membership_cutoff) %>%
+      dplyr::mutate(
+        cluster_raw = cluster,
+        cluster = x
+      )
+  }) %>%
+  dplyr::bind_rows()
+
+# Count genes per cluster
+print("\nTotal genes per cluster:")
+print(cluster_summary %>% dplyr::count(cluster))
+
+# Save results
+final_cluster_info <- cluster_summary
+save(final_cluster_info, file = "final_cluster_info.RData")
+
+# Optional: Export to CSV for easier viewing
 write.csv(final_cluster_info, "final_cluster_info.csv", row.names = FALSE)
-
-
 
 
 
